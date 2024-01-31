@@ -5,7 +5,23 @@ const ejs = require("ejs");
 const app= express();
 const pg = require("pg");
 const bcrypt = require("bcrypt");
-
+const session = require("express-session");
+const passport = require("passport");
+const Strategy = require("passport-local");
+const env = require("dotenv");
+env.config();
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: true,
+  cookie:{
+    maxAge: 1000 * 60 * 60 * 24, //indicate the life of cookie right now it is one day
+  },
+})
+);
+app.use(passport.initialize());
+app.use(passport.session());
+//the order pf above three lines should be maintained
 
 app.use(express.static("public"));
 app.set('view engine', 'ejs');
@@ -15,11 +31,11 @@ app.use(bodyParser.urlencoded({
 const saltRounds = 10;
 
 const db = new pg.Client({
-  user:"postgres",
-  host:"localhost",
-  database:"Secrets",
-  password:"vidit06",
-  port: 5432,
+  user:process.env.PG_USER,
+  host:process.env.PG_HOST,
+  database:process.env.PG_DATABASE,
+  password:process.env.PG_PASSWORD,
+  port:process.env.PG_PORT,
 })
 db.connect();
 
@@ -35,35 +51,19 @@ app.get('/register',function(req,res){
   res.render("register");
 })
 
-app.post('/login', async (req,res)=>{
-  const email = req.body.username;
-  const password = req.body.password;
-  try{
-    const checkEmail= await db.query("SELECT * FROM users WHERE email = $1",[email]);
-    if(checkEmail.rows.length == 0){
-      //alert("Kindly register");
-      res.render("register.ejs");
-    }
-    else {
-      bcrypt.compare(password,checkEmail.rows[0].password,(err,result)=>{
-      if(err){
-        console.log(error);
-      }else{
-        if(result){
-          res.render("secrets.ejs");
-        } else{
-          res.send("wrong password");
-        }
-      }
-      })
-
-      //console.log(checkEmail);
-    }
-  }catch(err){
-    console.log(err);
+app.get('/secrets',function(req,res){
+  console.log(req.user);
+  if(req.isAuthenticated()){
+    res.render("secrets.ejs");
+  }else{
+    res.redirect("/login");
   }
-
 })
+
+app.post('/login',passport.authenticate("local",{
+  successRedirect: "/secrets",
+  failureRedirect: "/login"
+}));
 
 app.post('/register', async (req,res)=>{
   const email = req.body.username;
@@ -77,9 +77,14 @@ app.post('/register', async (req,res)=>{
         if(err){
           console.log("error hashing ",err);
         } else{
-          const result = await db.query("INSERT INTO users (email,password) VALUES ($1,$2)",[email,hash]);
-          console.log(result);
-          res.render("secrets.ejs");
+          const result = await db.query("INSERT INTO users (email,password) VALUES ($1,$2) RETURNING *",[email,hash]);
+          //console.log(result);
+          const user = result.rows[0];
+          // res.render("secrets.ejs");
+          req.login(user, (err)=>{
+            console.log(err);
+            res.redirect("/secrets");
+          })
         }
 
       })
@@ -90,7 +95,41 @@ app.post('/register', async (req,res)=>{
   }
 
 })
+passport.use(new Strategy(async function verify(username,password,cb){
+  
+  try{
+    const checkEmail= await db.query("SELECT * FROM users WHERE email = $1",[username]);
+    if(checkEmail.rows.length == 0){
+      //alert("Kindly register");
+      //res.render("register.ejs");
+      return cb("User not Found");
+    }
+    else {
+      bcrypt.compare(password,checkEmail.rows[0].password,(err,result)=>{
+      if(err){
+        return cb(err);
+      }else{
+        if(result){
+          return cb(null, checkEmail.rows[0]);
+        } else{
+          return cb(null,false);
+        }
+      }
+      })
 
+      //console.log(checkEmail);
+    }
+  }catch(err){
+    return cb(err);
+  }
+}))
+
+passport.serializeUser((user, cb)=>{
+  cb(null,user);
+})
+passport.deserializeUser((user,cb)=>{
+  cb(null,user);
+})
 app.listen(3000,function(){
   console.log("server started on port 3000");
 });
